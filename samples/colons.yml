@@ -1,0 +1,8 @@
+---
+- name:  "Colon spacing demo"
+  vars:
+    key:    value
+    url:  https://example.com/path
+    inline_map: {a:1, b:  2, title:   "Hello: world"}
+  tasks:
+    - apt: name=vim state=present
