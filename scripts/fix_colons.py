@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-Fix "too many spaces after colon" in YAML mappings.
+Fix colon spacing in YAML mappings per ansible-lint:
 
-Scope (kept simple and safe):
-  - Compress multiple spaces after the first mapping colon on a line to a single space.
-    Examples: "key:   value" -> "key: value", "- module:    param=val" -> "- module: param=val".
-  - Normalize spaces after colons inside simple inline maps on the same line: { a:  1, b:  2 } -> { a: 1, b: 2 }.
+- Too many spaces before colon: reduce to zero spaces before ':' (e.g., "key  : value" -> "key: value").
+- Too many spaces after colon: ensure exactly one space after ':' when a value follows
+  (e.g., "key:   value" -> "key: value"; also fix "key:value" -> "key: value").
+- Inline maps on one line also normalized: { a  :1, b:  2 } -> {a: 1, b: 2}
 
 Out of scope:
-  - Colons inside quoted strings (left untouched).
-  - URL schemes and other value colons are not altered beyond the mapping separator.
+- Colons inside quoted strings are left untouched.
+- URL schemes and other value colons are not altered beyond the mapping separator.
 
 Usage:
   scripts/fix_colons.py FILE_OR_DIR [...]
@@ -28,20 +28,24 @@ sys.path.append(str(Path(__file__).resolve().parent))
 from shared import iter_yaml_files, split_code_and_comment, ensure_final_newline  # type: ignore
 
 
-def compress_after_first_mapping_colon(code: str) -> str:
-    """Compress multiple spaces after the first mapping colon on a line.
+def normalize_first_mapping_colon(code: str) -> str:
+    """Normalize spaces around the first mapping colon on the line.
 
-    Matches lines like:
-      <indent>key:   value
-      <indent>- module:    params
-    and reduces the spaces after ':' to a single space.
-    Skips lines that don't look like a mapping at line start.
+    Ensures 0 spaces before ':' and 1 space after if a value follows.
+    Examples:
+      "key  :value"   -> "key: value"
+      "- mod  :  args" -> "- mod: args"
+      "vars:"         -> "vars:"
     """
-    m = re.match(r"^(\s*(-\s*)?[^:#\n][^:]*:)(\s{2,})(.*)$", code)
+    m = re.match(r"^(\s*(?:-\s*)?[^:#\n][^:]*?)\s*:\s*(.*)$", code)
     if not m:
         return code
-    prefix, _, _, rest = m.groups()
-    return f"{prefix} {rest}"
+    prefix, rest = m.groups()
+    prefix = prefix.rstrip()
+    if rest:
+        return f"{prefix}: {rest}"
+    else:
+        return f"{prefix}:"
 
 
 def normalize_inline_map_colons(code: str) -> str:
@@ -68,6 +72,9 @@ def normalize_inline_map_colons(code: str) -> str:
                 i += 1
                 continue
             if ch == ':' and not in_single and not in_double:
+                # Remove spaces directly before ':'
+                while out and out[-1] == ' ':
+                    out.pop()
                 out.append(':')
                 # skip over spaces after ':' and leave one space if next non-space isn't '}' or ','
                 j = i + 1
@@ -82,8 +89,9 @@ def normalize_inline_map_colons(code: str) -> str:
             i += 1
         return '{' + ''.join(out).strip() + '}'
 
-    # Simple inline map matcher (no nested braces)
-    return re.sub(r"\{([^{}\n]*)\}", repl, code)
+    # Simple inline map matcher (no nested braces), avoid Jinja {{ }} and {% %}
+    # by ensuring the brace is not part of a double-brace sequence
+    return re.sub(r"(?<!\{)\{([^{}\n]*)\}(?!\})", repl, code)
 
 
 def fix_line(line: str) -> str:
@@ -91,8 +99,8 @@ def fix_line(line: str) -> str:
     if not code.strip() or code.lstrip().startswith('#'):
         return line
 
-    # First, compress after first mapping colon on the line
-    code2 = compress_after_first_mapping_colon(code)
+    # First, normalize around the first mapping colon on the line
+    code2 = normalize_first_mapping_colon(code)
     # Then, normalize inline map colon spacing
     code3 = normalize_inline_map_colons(code2)
 
@@ -140,4 +148,3 @@ def main() -> int:
 
 if __name__ == '__main__':
     raise SystemExit(main())
-

@@ -1,6 +1,6 @@
 ---
 vars:
-  jinja_tight: "{{my_var}}"
-  jinja_wide: "{{my_list|join(', ')}}"
-  jinja_block: "{%for i in items %}{{ i }}{% endfor %}"
+  jinja_tight: "{{ my_var }}"
+  jinja_wide: "{{ my_list|join(', ') }}"
+  jinja_block: "{% for i in items %}{{ i }}{% endfor %}"
   plain_text_with_brackets: "Range [ 1 , 2 ] should stay as is"
