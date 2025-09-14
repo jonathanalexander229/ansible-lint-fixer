@@ -3,21 +3,19 @@
   gather_facts: false
   tasks:
     # 1) Free-form debug without name
-    - name: Debug
-      ansible.builtin.debug:
-        msg: hello
+    - debug: msg=hello
 
     # 2) Mapping debug without name
-    - name: Debug
-      ansible.builtin.debug:
+    - debug:
         msg: hi
 
     # 3) Debug with existing name (should remain unchanged)
     - name: Custom debug
-      ansible.builtin.debug:
+      debug:
         msg: keep me
 
     # 4) Non-debug task (should not get name from this rule)
-    - ansible.builtin.copy:
+    - copy:
         src: /etc/hosts
         dest: /tmp/hosts
+
