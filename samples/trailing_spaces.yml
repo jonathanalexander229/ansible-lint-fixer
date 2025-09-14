@@ -1,0 +1,10 @@
+---
+# Trailing spaces after docstart ↑
+- name: "Trailing spaces demo"
+  vars:
+    msg: "Hello world"
+    note: "Keep indentation, drop only end-of-line ws"
+
+  tasks:
+    - debug: msg="done"
+      # comment with trailing ws
