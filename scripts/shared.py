@@ -115,4 +115,10 @@ FQCN_MAPPINGS = {
     'import_tasks': 'ansible.builtin.import_tasks',
     'include_role': 'ansible.builtin.include_role',
     'import_role': 'ansible.builtin.import_role',
+    # Builtin meta
+    'meta': 'ansible.builtin.meta',
+    # Common community actions seen in reports
+    'redfish_command': 'community.general.redfish_command',
+    'ipmi_power': 'community.general.ipmi_power',
+    'ipmi_boot': 'community.general.ipmi_boot',
 }
