@@ -79,6 +79,22 @@ def rewrite_name_template_placement(line: str) -> str:
     return f"{prefix}{new_val}{comment}"
 
 
+def is_task_level_name_line(code: str, task_key_indent: int | None) -> bool:
+    """Return True if this line is the task's name key, not a module param.
+
+    - Matches "- name:" on the dash line, or
+    - Matches a "name:" key exactly at the current task key indentation.
+    """
+    if re.match(r"^\s*-\s*name:\s*", code):
+        return True
+    if task_key_indent is None:
+        return False
+    leading = len(code) - len(code.lstrip(' '))
+    if leading == task_key_indent and re.match(rf"^(\s){{{task_key_indent}}}name:\s*", code):
+        return True
+    return False
+
+
 def convert_debug_free_form(line: str) -> list[str] | None:
     code, comment = split_code_and_comment(line)
     # Match various forms: optional dash, module token, then free-form msg=
@@ -165,16 +181,16 @@ def convert_shell_command_free_form_add_changed_when(line: str) -> list[str] | N
     return [f"{spaces}{dash}{mod}:{comment}", f"{param_indent}cmd: {val}", f"{param_indent}changed_when: false"]
 
 
-def add_missing_name_after_module(code: str, name_seen: bool, in_tasks: bool) -> tuple[str, list[str] | None]:
+def add_missing_name_after_module(code: str, name_seen: bool, in_tasks: bool, task_key_indent: int | None) -> tuple[str, list[str] | None]:
     # If no name seen yet and we hit a module key after dash or at task indent, add a name
     # Detect the module token and derive a simple name like "<Module> task"
     # dash form
     m = re.match(r"^(\s*-\s*)([\w.]+):(\s|$)", code)
     if m and in_tasks and not name_seen:
-        dash_prefix = m.group(1)  # includes leading spaces + '- '
-        m2 = re.match(r"^(\s*)-\s*$", dash_prefix)
-        base = m2.group(1) if m2 else ""
-        param_indent = base + "  "
+        # task name key should be aligned at task_key_indent
+        if task_key_indent is None:
+            return code, None
+        param_indent = " " * task_key_indent
         module = m.group(2).split(".")[-1]
         title = module.replace("_", " ").title()
         return code, [f"{param_indent}name: {title}"]
@@ -214,8 +230,8 @@ def fix_file(path: Path) -> bool:
             task_key_indent = (dash_indent or 0) + 2
             name_seen = False
 
-        # If this is any name: line within a task, mark seen (even if no change needed)
-        if in_tasks and re.match(r"^\s*-?\s*name:\s*", code):
+        # Only consider task-level name (not module params) as name seen
+        if in_tasks and is_task_level_name_line(code, task_key_indent):
             name_seen = True
 
         # Fix debug free-form first (returns multiple lines if changed)
@@ -238,7 +254,7 @@ def fix_file(path: Path) -> bool:
             code = replace_fqcn_module_at_indent(code, task_key_indent)
 
         # Add missing name if we see first module key in a task and haven't seen name yet
-        code_after_name, inject = add_missing_name_after_module(code, name_seen, in_tasks)
+        code_after_name, inject = add_missing_name_after_module(code, name_seen, in_tasks, task_key_indent)
         code = code_after_name
         if inject:
             out.append(code + comment)
@@ -247,13 +263,14 @@ def fix_file(path: Path) -> bool:
             name_seen = True
             continue
 
-        # Move Jinja to end in name, then apply casing
-        name_rewritten = rewrite_name_template_placement(code + comment)
-        fixed_line = fix_name_casing_in_line(name_rewritten)
-        if fixed_line != code + comment:
-            name_seen = True
-            out.append(fixed_line)
-            continue
+        # Move Jinja to end in task-level name, then apply casing
+        if is_task_level_name_line(code, task_key_indent):
+            name_rewritten = rewrite_name_template_placement(code + comment)
+            fixed_line = fix_name_casing_in_line(name_rewritten)
+            if fixed_line != code + comment:
+                name_seen = True
+                out.append(fixed_line)
+                continue
 
         # Pass through
         out.append(code + comment)
