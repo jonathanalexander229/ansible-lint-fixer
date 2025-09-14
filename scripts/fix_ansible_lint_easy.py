@@ -107,7 +107,10 @@ def convert_debug_free_form(line: str) -> list[str] | None:
     # Always normalize to builtin FQCN for debug
     mod = "ansible.builtin.debug"
     val = m.group("val").rstrip()
-    param_indent = spaces + "  "
+    # If dash is present, params of the module should be two spaces deeper
+    # than task keys (i.e., four spaces after the dash indent). Otherwise,
+    # two spaces after the module key indent.
+    param_indent = spaces + ("    " if dash else "  ")
     return [f"{spaces}{dash}{mod}:{comment}", f"{param_indent}msg: {val}"]
 
 
@@ -182,18 +185,21 @@ def convert_shell_command_free_form_add_changed_when(line: str) -> list[str] | N
 
 
 def add_missing_name_after_module(code: str, name_seen: bool, in_tasks: bool, task_key_indent: int | None) -> tuple[str, list[str] | None]:
-    # If no name seen yet and we hit a module key after dash or at task indent, add a name
-    # Detect the module token and derive a simple name like "<Module> task"
-    # dash form
+    """If this line is a dash-form module key and it's a debug task without a name, add name: Debug.
+
+    Only acts for debug/ansible.builtin.debug, and only when in a tasks list without a seen name.
+    """
     m = re.match(r"^(\s*-\s*)([\w.]+):(\s|$)", code)
     if m and in_tasks and not name_seen:
         # task name key should be aligned at task_key_indent
         if task_key_indent is None:
             return code, None
+        module_token = m.group(2)
+        module = module_token.split(".")[-1]
+        if module != "debug":
+            return code, None
         param_indent = " " * task_key_indent
-        module = m.group(2).split(".")[-1]
-        title = module.replace("_", " ").title()
-        return code, [f"{param_indent}name: {title}"]
+        return code, [f"{param_indent}name: Debug"]
 
     return code, None
 
@@ -234,11 +240,36 @@ def fix_file(path: Path) -> bool:
         if in_tasks and is_task_level_name_line(code, task_key_indent):
             name_seen = True
 
-        # Fix debug free-form first (returns multiple lines if changed)
+        # Handle debug tasks: normalize and add task-level name first
+        if in_tasks and not name_seen:
+            # free-form with msg= on the same line
+            m_dbg_ff = re.match(r"^(?P<spaces>\s*)(?P<dash>-\s+)(?P<mod>(?:ansible\.builtin\.)?debug):\s*msg=(?P<val>[^#\n]+?)\s*$",
+                                 code)
+            if m_dbg_ff:
+                spaces = m_dbg_ff.group('spaces')
+                dash = m_dbg_ff.group('dash')  # includes '- '
+                val = m_dbg_ff.group('val').rstrip()
+                out.append(f"{spaces}{dash}name: Debug")
+                out.append(f"{spaces}  ansible.builtin.debug:{comment}")
+                out.append(f"{spaces}    msg: {val}")
+                name_seen = True
+                continue
+
+            # mapping header form '- debug:'
+            m_dbg_map = re.match(r"^(?P<spaces>\s*)(?P<dash>-\s+)(?P<mod>(?:ansible\.builtin\.)?debug):\s*$",
+                                 code)
+            if m_dbg_map:
+                spaces = m_dbg_map.group('spaces')
+                dash = m_dbg_map.group('dash')
+                out.append(f"{spaces}{dash}name: Debug")
+                out.append(f"{spaces}  ansible.builtin.debug:{comment}")
+                name_seen = True
+                continue
+
+        # Fix debug free-form (non-task or already named tasks)
         multi = convert_debug_free_form(line)
         if multi:
             out.extend(multi)
-            # ensure name still tracked
             continue
 
         # Convert free-form shell/command when clearly read-only and add changed_when
