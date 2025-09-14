@@ -2,20 +2,20 @@
 - name: Use short module names
   hosts: all
   tasks:
-    - copy:
+    - ansible.builtin.copy:
         src: /etc/hosts
         dest: /tmp/hosts
-    - template: src=foo.j2 dest=/tmp/foo
-    - file:
+    - ansible.builtin.template: src=foo.j2 dest=/tmp/foo
+    - ansible.builtin.file:
         path: /tmp/bar
         state: touch
-    - service: name=sshd state=restarted
-    - shell: echo hello
-    - command: /bin/true
-    - apt:
+    - ansible.builtin.service: name=sshd state=restarted
+    - ansible.builtin.shell: echo hello
+    - ansible.builtin.command: /bin/true
+    - ansible.builtin.apt:
         name: vim
         state: present
-    - get_url:
+    - ansible.builtin.get_url:
         url: https://example.com/file
         dest: /tmp/file
 
@@ -23,7 +23,11 @@
 - name: Already FQCN
   tasks:
     - name: copy task
-      copy:
+      ansible.builtin.copy:
         src: a
         dest: b
-    - debug: msg="copy: test"  # string containing 'copy:'
+    - ansible.builtin.debug: msg="copy: test"  # string containing 'copy:'
+    - ansible.builtin.git:
+        repo: https://example.com/repo.git
+        dest: /srv/repo
+        user: deploy  # should remain a param, not fqcn

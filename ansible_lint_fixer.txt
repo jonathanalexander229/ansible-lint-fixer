@@ -304,14 +304,41 @@ class AnsibleLintFixer:
     def _fix_ansible_specific_issues(self, lines: List[str]) -> List[str]:
         """Fix specific ansible-lint issues."""
         result = []
+        # Track context of current task list item indentation
+        dash_indent: Optional[int] = None
+        task_key_indent: Optional[int] = None
         
         for line in lines:
             # Fix: command and shell tasks should use 'cmd' parameter
             line = self._fix_command_shell_syntax(line)
+
+            # Update task indentation context when encountering a list item
+            m_dash = re.match(r'^(\s*)-\s+.*', line)
+            if m_dash:
+                dash_indent = len(m_dash.group(1))
+                task_key_indent = dash_indent + self.indent_size
             
-            # Fix: Use FQCN (Fully Qualified Collection Name) for modules
-            line = self._fix_fqcn(line)
-            
+            # Fix: Use FQCN for modules
+            before = line
+            line = self._fix_fqcn(line)  # dash-only safe replacement
+
+            # If not changed by dash-form and we know the task key indent,
+            # try replacing a module key exactly at that indentation.
+            if line == before and task_key_indent is not None and line.strip() and not line.lstrip().startswith('#'):
+                # compute leading spaces
+                leading = len(line) - len(line.lstrip(' '))
+                if leading == task_key_indent:
+                    for short_name, fqcn in self.fqcn_mappings.items():
+                        if fqcn in line:
+                            continue
+                        pat = rf'^(\s){{{task_key_indent}}}{re.escape(short_name)}:(\s|$)'
+                        if re.search(pat, line):
+                            line = re.sub(rf'^(\s){{{task_key_indent}}}{re.escape(short_name)}:(\s|$)',
+                                          lambda m: ' ' * task_key_indent + fqcn + ':' + (m.group(2) if m.group(2) else ''),
+                                          line,
+                                          count=1)
+                            break
+
             # Fix: Package manager modules should not use 'state=latest'
             line = self._fix_package_state_latest(line)
             
@@ -352,29 +379,26 @@ class AnsibleLintFixer:
         if line.strip().startswith('#'):
             return line
 
-        # Apply FQCN replacements conservatively and only at mapping keys
+        # Apply FQCN replacements conservatively and only at mapping keys that
+        # follow a list dash (i.e., task item lines). This prevents matching
+        # nested parameters like "user:" under other modules.
         for short_name, fqcn in self.fqcn_mappings.items():
             # If this FQCN already appears on the line, skip
             if fqcn in line:
                 continue
 
-            # Anchor replacements to the start of the mapping key only
-            patterns = [
-                rf'^(\s*-\s*){re.escape(short_name)}:(\s|$)',
-                rf'^(\s+){re.escape(short_name)}:(\s|$)',
-                rf'^{re.escape(short_name)}:(\s|$)',
-            ]
-
-            for pat in patterns:
-                m = re.search(pat, line)
-                if m:
-                    start, end = m.span()
-                    prefix = line[:start]
-                    matched = line[start:end]
-                    # Rebuild with fqcn while preserving whitespace
-                    replaced = matched.replace(f"{short_name}:", f"{fqcn}:")
-                    line = prefix + replaced + line[end:]
-                    break  # only replace once per module token
+            # Anchor replacements to a list item line only (dash present)
+            pat = rf'^(\s*-\s*){re.escape(short_name)}:(\s|$)'
+            m = re.search(pat, line)
+            if m:
+                start, end = m.span()
+                prefix = line[:start]
+                matched = line[start:end]
+                # Rebuild with fqcn while preserving whitespace
+                replaced = matched.replace(f"{short_name}:", f"{fqcn}:")
+                line = prefix + replaced + line[end:]
+                # only replace once per module token on a line
+                break
 
         return line
     

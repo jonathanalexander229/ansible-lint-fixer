@@ -22,46 +22,68 @@ sys.path.append(str(Path(__file__).resolve().parent))
 from shared import iter_yaml_files, split_code_and_comment, FQCN_MAPPINGS  # type: ignore
 
 
-def replace_fqcn_in_line(line: str) -> str:
-    code, comment = split_code_and_comment(line)
-    stripped = code.strip()
-    if not stripped or stripped.startswith('#'):
-        return line
+def replace_fqcn_in_line_at_indent(code: str, target_indent: int) -> str:
+    """Replace short module name with FQCN if key is at target indent.
 
-    # Skip if already using a collection prefix on the module token
-    # We'll simply not replace if the specific fqcn already appears on the line.
+    - Only replaces mapping keys exactly at target_indent columns.
+    - Skips if the fqcn already appears in the code.
+    - Returns modified code segment only (no comment portion).
+    """
+    # Determine current indent of this code segment
+    leading = len(code) - len(code.lstrip(' '))
+    if leading != target_indent:
+        return code
+
     for short, fqcn in FQCN_MAPPINGS.items():
         if fqcn in code:
-            continue  # already fqcn for this module on this line
-
-        # Match module usage patterns at the start of a mapping key
-        # - "- copy:"  (task list item)
-        # - "  copy:"  (indented mapping)
-        # - "copy:"    (top-level key)
-        patterns = [
-            rf'^(\s*-\s*){re.escape(short)}:(\s|$)',
-            rf'^(\s+){re.escape(short)}:(\s|$)',
-            rf'^{re.escape(short)}:(\s|$)',
-        ]
-
-        for pat in patterns:
-            m = re.search(pat, code)
-            if m:
-                # Rebuild with fqcn while preserving indentation and trailing whitespace
-                start, end = m.span()
-                prefix = code[:start]
-                matched = code[start:end]
-                replaced = matched.replace(f"{short}:", f"{fqcn}:")
-                code = prefix + replaced + code[end:]
-                break
-
-    return code + comment
+            continue
+        # Key must begin right after indentation
+        if re.match(rf'^(\s){{{target_indent}}}{re.escape(short)}:(\s|$)', code):
+            return code.replace(f"{short}:", f"{fqcn}:", 1)
+    return code
 
 
 def fix_file(path: Path) -> bool:
     original = path.read_text(encoding='utf-8')
     lines = original.splitlines(keepends=False)
-    fixed = [replace_fqcn_in_line(ln) for ln in lines]
+
+    fixed: list[str] = []
+    # Track the indentation level for keys within a task list item
+    # When we see a list dash ("- "), keys of the mapping in that item typically
+    # start at dash_indent + 2 spaces.
+    dash_indent: int | None = None
+    task_key_indent: int | None = None
+
+    for line in lines:
+        code, comment = split_code_and_comment(line)
+        stripped = code.strip()
+
+        # Detect start of a list item (task)
+        m_dash = re.match(r'^(\s*)-\s+.*', code)
+        if m_dash:
+            dash_indent = len(m_dash.group(1))
+            task_key_indent = dash_indent + 2
+
+        # Try to replace when module appears right after the dash ("- copy:")
+        replaced = False
+        for short, fqcn in FQCN_MAPPINGS.items():
+            if fqcn in code:
+                continue
+            m_mod_dash = re.search(rf'^(\s*-\s*){re.escape(short)}:(\s|$)', code)
+            if m_mod_dash:
+                start, end = m_mod_dash.span()
+                prefix = code[:start]
+                matched = code[start:end]
+                code = prefix + matched.replace(f"{short}:", f"{fqcn}:") + code[end:]
+                replaced = True
+                break
+
+        # If not replaced via dash form, attempt indent-based replacement
+        if not replaced and task_key_indent is not None and stripped and not stripped.startswith('#'):
+            code = replace_fqcn_in_line_at_indent(code, task_key_indent)
+
+        fixed.append(code + comment)
+
     new_content = '\n'.join(fixed)
     if new_content != original:
         # preserve original final newline
@@ -101,4 +123,3 @@ def main() -> int:
 
 if __name__ == '__main__':
     raise SystemExit(main())
-
