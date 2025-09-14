@@ -1,21 +1,22 @@
 ---
-- hosts: all
-  gather_facts: false
-  tasks:
-    # 1) Free-form debug without name
-    - debug: msg=hello
+# 1) Free-form debug without name
+- ansible.builtin.debug:
+    msg: hello
 
-    # 2) Mapping debug without name
-    - debug:
-        msg: hi
+# 2) Mapping debug without name
+- ansible.builtin.debug:
+    msg: hi
 
-    # 3) Debug with existing name (should remain unchanged)
-    - name: Custom debug
-      debug:
-        msg: keep me
+# 3) Debug with existing name (should remain unchanged)
+- name: Custom debug
+  ansible.builtin.debug:
+    msg: keep me
 
-    # 4) Non-debug task (should not get name from this rule)
-    - copy:
-        src: /etc/hosts
-        dest: /tmp/hosts
+# 4) Non-debug task (should not get name from this rule)
+- ansible.builtin.copy:
+    src: /etc/hosts
+    dest: /tmp/hosts
 
+# 5) Include role without task name (should get a task-level name: Include Role)
+- ansible.builtin.include_role:
+    name: tpm-bind

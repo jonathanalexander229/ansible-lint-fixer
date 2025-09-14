@@ -237,11 +237,21 @@ def fix_file(path: Path) -> bool:
             name_seen = False
 
         # Only consider task-level name (not module params) as name seen
-        if in_tasks and is_task_level_name_line(code, task_key_indent):
+        if is_task_level_name_line(code, task_key_indent):
             name_seen = True
 
-        # Handle debug tasks: normalize and add task-level name first
-        if in_tasks and not name_seen:
+        # Handle debug/include_role tasks: normalize and add task-level name first
+        if not name_seen:
+            # include_role header form
+            m_inc = re.match(r"^(?P<spaces>\s*)(?P<dash>-\s+)(?P<mod>(?:ansible\.builtin\.)?include_role):\s*$", code)
+            if m_inc:
+                spaces = m_inc.group('spaces')
+                dash = m_inc.group('dash')
+                out.append(f"{spaces}{dash}name: Include Role")
+                out.append(f"{spaces}  ansible.builtin.include_role:{comment}")
+                name_seen = True
+                continue
+
             # free-form with msg= on the same line
             m_dbg_ff = re.match(r"^(?P<spaces>\s*)(?P<dash>-\s+)(?P<mod>(?:ansible\.builtin\.)?debug):\s*msg=(?P<val>[^#\n]+?)\s*$",
                                  code)
