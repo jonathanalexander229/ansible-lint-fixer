@@ -22,7 +22,8 @@
 # Below should not accidentally convert values that are already FQCN or comments
 - name: Already FQCN
   tasks:
-    - ansible.builtin.copy:
+    - name: copy task
+      copy:
         src: a
         dest: b
     - debug: msg="copy: test"  # string containing 'copy:'

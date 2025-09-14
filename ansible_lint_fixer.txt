@@ -341,20 +341,41 @@ class AnsibleLintFixer:
         return line
     
     def _fix_fqcn(self, line: str) -> str:
-        """Fix Fully Qualified Collection Names."""
-        # Apply FQCN replacements
+        """Fix Fully Qualified Collection Names without touching task names or params.
+
+        Uses anchored regex patterns so only mapping keys that name a module
+        at the beginning of the line (optionally after list dash/indentation)
+        are replaced. This avoids altering keys like ``name:`` within module
+        arguments and avoids replacements inside strings or comments.
+        """
+        # Skip full-line comments early
+        if line.strip().startswith('#'):
+            return line
+
+        # Apply FQCN replacements conservatively and only at mapping keys
         for short_name, fqcn in self.fqcn_mappings.items():
-            # Match module usage patterns
+            # If this FQCN already appears on the line, skip
+            if fqcn in line:
+                continue
+
+            # Anchor replacements to the start of the mapping key only
             patterns = [
-                f'- {short_name}:',
-                f'  {short_name}:',
-                f'{short_name}:'
+                rf'^(\s*-\s*){re.escape(short_name)}:(\s|$)',
+                rf'^(\s+){re.escape(short_name)}:(\s|$)',
+                rf'^{re.escape(short_name)}:(\s|$)',
             ]
-            
-            for pattern in patterns:
-                if pattern in line and fqcn not in line and not line.strip().startswith('#'):
-                    line = line.replace(pattern, pattern.replace(short_name, fqcn))
-        
+
+            for pat in patterns:
+                m = re.search(pat, line)
+                if m:
+                    start, end = m.span()
+                    prefix = line[:start]
+                    matched = line[start:end]
+                    # Rebuild with fqcn while preserving whitespace
+                    replaced = matched.replace(f"{short_name}:", f"{fqcn}:")
+                    line = prefix + replaced + line[end:]
+                    break  # only replace once per module token
+
         return line
     
     def _fix_package_state_latest(self, line: str) -> str:
