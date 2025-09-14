@@ -1,0 +1,10 @@
+---
+vars:
+  long_text: >
+    This is a very long variable value that exceeds the default maximum line length of one hundred and twenty characters
+    and should be wrapped using a folded scalar to satisfy lint rules.
+  another_really_long_text: >
+    This value is also quite long and will need to be split into multiple lines by the fixer to comply with line length
+    guidelines that are commonly enforced by linters.
+  short_ok: "short value"
+  name: "This line should not be wrapped even if long because it is a task name key and handled by other rules."
