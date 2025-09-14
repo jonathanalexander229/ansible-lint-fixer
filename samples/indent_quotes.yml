@@ -1,0 +1,8 @@
+# Mixed indentation and quotes sample
+  - name: "Install package if needed"
+    apt: name=vim state="present"
+  when: ansible_os_family == 'Debian' and {{ some_condition }}
+  vars:
+    quoted_bool: true
+    quoted_num: 42
+    jinja_var: {{ my_var }}

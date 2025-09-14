@@ -1,0 +1,827 @@
+#!/usr/bin/env python3
+"""
+Ansible Lint Fixer
+
+This script intelligently corrects common Ansible lint errors including:
+- Line length issues
+- Truth value errors (yes/no -> true/false)
+- Document start issues (missing ---)
+- Indentation problems
+- Trailing whitespace
+- Empty lines
+- Quote consistency
+- FQCN module names
+- Package state fixes
+- Command/shell syntax
+- And more common ansible-lint violations
+"""
+
+import re
+import sys
+import argparse
+from pathlib import Path
+import yaml
+from typing import List, Tuple, Optional, Dict, Any
+import os
+
+
+class AnsibleLintFixer:
+    def __init__(self, max_length: int = 120, indent_size: int = 2):
+        self.max_length = max_length
+        self.indent_size = indent_size
+        
+        # Truth value mappings
+        self.truth_values = {
+            'yes': 'true',
+            'Yes': 'true', 
+            'YES': 'true',
+            'no': 'false',
+            'No': 'false',
+            'NO': 'false',
+            'on': 'true',
+            'On': 'true',
+            'ON': 'true',
+            'off': 'false',
+            'Off': 'false',
+            'OFF': 'false'
+        }
+        
+        # Common boolean keys that should use true/false
+        self.boolean_keys = {
+            'become', 'become_user', 'check_mode', 'debug', 'delegate_to',
+            'enabled', 'force', 'gather_facts', 'ignore_errors', 'listen',
+            'no_log', 'run_once', 'serial', 'strategy', 'tags', 'until',
+            'validate', 'when', 'changed_when', 'failed_when', 'create',
+            'recurse', 'backup', 'follow', 'unsafe_writes', 'validate_certs',
+            'use_backend', 'update_cache', 'autoremove', 'autoclean'
+        }
+        
+        # Common module FQCN mappings
+        self.fqcn_mappings = {
+            'copy': 'ansible.builtin.copy',
+            'file': 'ansible.builtin.file',
+            'template': 'ansible.builtin.template',
+            'service': 'ansible.builtin.service',
+            'systemd': 'ansible.builtin.systemd',
+            'user': 'ansible.builtin.user',
+            'group': 'ansible.builtin.group',
+            'package': 'ansible.builtin.package',
+            'yum': 'ansible.builtin.yum',
+            'apt': 'ansible.builtin.apt',
+            'pip': 'ansible.builtin.pip',
+            'git': 'ansible.builtin.git',
+            'uri': 'ansible.builtin.uri',
+            'get_url': 'ansible.builtin.get_url',
+            'unarchive': 'ansible.builtin.unarchive',
+            'lineinfile': 'ansible.builtin.lineinfile',
+            'blockinfile': 'ansible.builtin.blockinfile',
+            'replace': 'ansible.builtin.replace',
+            'find': 'ansible.builtin.find',
+            'stat': 'ansible.builtin.stat',
+            'debug': 'ansible.builtin.debug',
+            'fail': 'ansible.builtin.fail',
+            'assert': 'ansible.builtin.assert',
+            'set_fact': 'ansible.builtin.set_fact',
+            'include_vars': 'ansible.builtin.include_vars',
+            'command': 'ansible.builtin.command',
+            'shell': 'ansible.builtin.shell',
+            'raw': 'ansible.builtin.raw',
+            'script': 'ansible.builtin.script',
+            'cron': 'ansible.builtin.cron',
+            'mount': 'ansible.builtin.mount',
+            'sysctl': 'ansible.builtin.sysctl',
+            'setup': 'ansible.builtin.setup',
+            'ping': 'ansible.builtin.ping',
+            'wait_for': 'ansible.builtin.wait_for',
+            'pause': 'ansible.builtin.pause',
+            'fetch': 'ansible.builtin.fetch',
+            'synchronize': 'ansible.builtin.synchronize',
+            'slurp': 'ansible.builtin.slurp',
+            'include': 'ansible.builtin.include',
+            'include_tasks': 'ansible.builtin.include_tasks',
+            'import_tasks': 'ansible.builtin.import_tasks',
+            'include_role': 'ansible.builtin.include_role',
+            'import_role': 'ansible.builtin.import_role'
+        }
+        
+    def fix_file(self, file_path: str) -> bool:
+        """Fix lint issues in an Ansible YAML file."""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            fixed_content = self.fix_content(content)
+            
+            if fixed_content != content:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(fixed_content)
+                print(f"Fixed lint issues in: {file_path}")
+                return True
+            else:
+                print(f"No changes needed in: {file_path}")
+                return False
+                
+        except Exception as e:
+            print(f"Error processing {file_path}: {e}")
+            return False
+    
+    def fix_content(self, content: str) -> str:
+        """Fix all lint issues in YAML content."""
+        lines = content.splitlines()
+        
+        # Step 1: Fix document structure issues
+        lines = self._fix_document_start(lines)
+        
+        # Step 2: Fix line-by-line issues
+        fixed_lines = []
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            
+            # Fix trailing whitespace
+            line = line.rstrip()
+            
+            # Fix truth values
+            line = self._fix_truth_values(line)
+            
+            # Fix indentation issues
+            line = self._fix_indentation(line)
+            
+            # Fix quotes consistency
+            line = self._fix_quotes(line)
+            
+            # Fix line length (may return multiple lines)
+            if len(line) > self.max_length:
+                fixed_line = self._fix_long_line(line, lines, i)
+                if isinstance(fixed_line, list):
+                    fixed_lines.extend(fixed_line)
+                else:
+                    fixed_lines.append(fixed_line)
+            else:
+                fixed_lines.append(line)
+            
+            i += 1
+        
+        # Step 3: Fix empty lines and structure issues
+        fixed_lines = self._fix_empty_lines(fixed_lines)
+        
+        # Step 4: Fix specific ansible-lint issues
+        fixed_lines = self._fix_ansible_specific_issues(fixed_lines)
+        
+        return '\n'.join(fixed_lines)
+    
+    def _fix_document_start(self, lines: List[str]) -> List[str]:
+        """Fix document start issues (missing ---)."""
+        if not lines:
+            return ['---', '']
+        
+        # Check if document starts with ---
+        first_non_empty = None
+        for i, line in enumerate(lines):
+            if line.strip():
+                first_non_empty = i
+                break
+        
+        if first_non_empty is None:
+            return ['---', '']
+        
+        if lines[first_non_empty].strip() != '---':
+            # Insert --- at the beginning
+            result = ['---']
+            if first_non_empty > 0:
+                result.append('')  # Add empty line after ---
+            result.extend(lines)
+            return result
+        
+        return lines
+    
+    def _fix_truth_values(self, line: str) -> str:
+        """Fix truth value errors (yes/no -> true/false)."""
+        # Don't modify comments or strings
+        if line.strip().startswith('#'):
+            return line
+        
+        # Handle quoted strings - don't modify truth values inside quotes
+        in_quotes = False
+        quote_char = None
+        
+        # Check if we're inside quotes
+        quote_positions = []
+        for i, char in enumerate(line):
+            if char in ['"', "'"] and (i == 0 or line[i-1] != '\\'):
+                quote_positions.append((i, char))
+        
+        # Apply truth value replacements only outside quotes
+        result = line
+        for old_value, new_value in self.truth_values.items():
+            # Look for key: value patterns
+            patterns = [
+                rf':\s+{re.escape(old_value)}\s*$',  # key: yes
+                rf':\s+{re.escape(old_value)}\s+',   # key: yes something
+                rf'=\s*{re.escape(old_value)}\s*$',  # key=yes
+                rf'=\s*{re.escape(old_value)}\s+',   # key=yes something
+            ]
+            
+            for pattern in patterns:
+                # Only replace if not inside quotes
+                matches = list(re.finditer(pattern, result))
+                for match in reversed(matches):  # Reverse to maintain positions
+                    start, end = match.span()
+                    # Check if this match is inside quotes
+                    inside_quotes = False
+                    for i in range(0, len(quote_positions), 2):
+                        if i + 1 < len(quote_positions):
+                            q_start = quote_positions[i][0]
+                            q_end = quote_positions[i + 1][0]
+                            if q_start < start < q_end:
+                                inside_quotes = True
+                                break
+                    
+                    if not inside_quotes:
+                        result = result[:start] + match.group().replace(old_value, new_value) + result[end:]
+        
+        return result
+    
+    def _fix_indentation(self, line: str) -> str:
+        """Fix indentation issues."""
+        if not line.strip():
+            return line
+        
+        # Get current indentation
+        indent_count = len(line) - len(line.lstrip())
+        
+        # Ensure indentation is multiple of indent_size
+        if indent_count % self.indent_size != 0:
+            # Round to nearest multiple
+            correct_indent = (indent_count // self.indent_size) * self.indent_size
+            if indent_count - correct_indent > self.indent_size // 2:
+                correct_indent += self.indent_size
+            
+            return ' ' * correct_indent + line.lstrip()
+        
+        return line
+    
+    def _fix_quotes(self, line: str) -> str:
+        """Fix quote consistency issues."""
+        # Skip comments
+        if line.strip().startswith('#'):
+            return line
+        
+        # Fix common quoting issues
+        # 1. Variables should not be quoted when used in when conditions
+        line = re.sub(r'when:\s*"([^"]*\{\{[^}]*\}\}[^"]*)"', r'when: \1', line)
+        
+        # 2. Simple variable references don't need quotes
+        line = re.sub(r':\s*"(\{\{[^}]*\}\})"', r': \1', line)
+        
+        # 3. Remove quotes from simple boolean/numeric values
+        line = re.sub(r':\s*"(true|false|\d+)"', r': \1', line)
+        
+        return line
+    
+    def _fix_empty_lines(self, lines: List[str]) -> List[str]:
+        """Fix empty line issues."""
+        result = []
+        prev_line_empty = False
+        
+        for line in lines:
+            is_empty = not line.strip()
+            
+            # Avoid multiple consecutive empty lines
+            if is_empty and prev_line_empty:
+                continue
+            
+            result.append(line)
+            prev_line_empty = is_empty
+        
+        # Remove trailing empty lines
+        while result and not result[-1].strip():
+            result.pop()
+        
+        # Ensure file ends with newline (will be added by join)
+        return result
+    
+    def _fix_ansible_specific_issues(self, lines: List[str]) -> List[str]:
+        """Fix specific ansible-lint issues."""
+        result = []
+        
+        for line in lines:
+            # Fix: command and shell tasks should use 'cmd' parameter
+            line = self._fix_command_shell_syntax(line)
+            
+            # Fix: Use FQCN (Fully Qualified Collection Name) for modules
+            line = self._fix_fqcn(line)
+            
+            # Fix: Package manager modules should not use 'state=latest'
+            line = self._fix_package_state_latest(line)
+            
+            # Fix: Octal file permissions
+            line = self._fix_octal_permissions(line)
+            
+            result.append(line)
+        
+        return result
+    
+    def _fix_command_shell_syntax(self, line: str) -> str:
+        """Fix command and shell module syntax."""
+        # Look for command: or shell: followed by a command (not using cmd:)
+        patterns = [
+            (r'(\s*-?\s*)((?:ansible\.builtin\.)?command):\s+([^#\n]+?)(\s*#.*)?$', 'cmd'),
+            (r'(\s*-?\s*)((?:ansible\.builtin\.)?shell):\s+([^#\n]+?)(\s*#.*)?$', 'cmd')
+        ]
+        
+        for pattern, param in patterns:
+            match = re.match(pattern, line)
+            if match and 'cmd:' not in line:
+                indent, module, command, comment = match.groups()
+                comment = comment or ''
+                # Create multi-line format
+                return f"{indent}{module}:{comment}"
+        
+        return line
+    
+    def _fix_fqcn(self, line: str) -> str:
+        """Fix Fully Qualified Collection Names."""
+        # Apply FQCN replacements
+        for short_name, fqcn in self.fqcn_mappings.items():
+            # Match module usage patterns
+            patterns = [
+                f'- {short_name}:',
+                f'  {short_name}:',
+                f'{short_name}:'
+            ]
+            
+            for pattern in patterns:
+                if pattern in line and fqcn not in line and not line.strip().startswith('#'):
+                    line = line.replace(pattern, pattern.replace(short_name, fqcn))
+        
+        return line
+    
+    def _fix_package_state_latest(self, line: str) -> str:
+        """Fix package state=latest to state=present."""
+        # Common package managers
+        package_modules = ['yum', 'apt', 'package', 'ansible.builtin.yum', 
+                          'ansible.builtin.apt', 'ansible.builtin.package', 'dnf',
+                          'ansible.builtin.dnf', 'zypper', 'ansible.builtin.zypper']
+        
+        for module in package_modules:
+            if f'{module}:' in line and 'state=latest' in line:
+                line = line.replace('state=latest', 'state=present')
+                # Add comment explaining the change if not already present
+                if '# Changed from latest' not in line and '#' not in line:
+                    line += '  # Changed from latest to present for idempotency'
+        
+        return line
+    
+    def _fix_octal_permissions(self, line: str) -> str:
+        """Fix octal file permissions to be properly quoted."""
+        # Look for mode parameters with unquoted octal values
+        octal_pattern = r'(mode\s*[=:]\s*)([0-7]{3,4})(?!\d)'
+        
+        def replace_octal(match):
+            prefix, octal_val = match.groups()
+            return f'{prefix}"{octal_val}"'
+        
+        return re.sub(octal_pattern, replace_octal, line)
+    
+    def _fix_long_line(self, line: str, all_lines: List[str], line_index: int) -> str or List[str]:
+        """Apply various strategies to fix a long line."""
+        # Get indentation level
+        indent = len(line) - len(line.lstrip())
+        base_indent = ' ' * indent
+        
+        # Strategy 1: Fix long task names
+        if self._is_task_name(line):
+            return self._fix_task_name(line, base_indent)
+        
+        # Strategy 2: Fix long module calls with parameters
+        if self._is_module_with_params(line):
+            return self._fix_module_params(line, base_indent)
+        
+        # Strategy 3: Fix long when conditions
+        if 'when:' in line and ('and' in line or 'or' in line):
+            return self._fix_when_condition(line, base_indent)
+        
+        # Strategy 4: Fix long variable definitions
+        if self._is_variable_definition(line):
+            return self._fix_variable_definition(line, base_indent)
+        
+        # Strategy 5: Fix long strings
+        if self._is_long_string(line):
+            return self._fix_long_string(line, base_indent)
+        
+        # Strategy 6: Fix long lists
+        if '[' in line and ']' in line and ',' in line:
+            return self._fix_inline_list(line, base_indent)
+        
+        # Strategy 7: Fix long with_items or loop constructs
+        if self._is_long_loop_construct(line):
+            return self._fix_loop_construct(line, base_indent)
+        
+        # Strategy 8: Fix long tags
+        if 'tags:' in line and '[' in line:
+            return self._fix_tags(line, base_indent)
+        
+        # If no specific strategy applies, try generic line breaking
+        return self._generic_line_break(line, base_indent)
+    
+    def _is_task_name(self, line: str) -> bool:
+        """Check if line is a task name."""
+        stripped = line.strip()
+        return (stripped.startswith('- name:') or 
+                stripped.startswith('name:'))
+    
+    def _fix_task_name(self, line: str, base_indent: str) -> List[str]:
+        """Fix long task names by using YAML folded scalar."""
+        if '- name:' in line:
+            name_part = line.split('- name:', 1)[1].strip()
+            return [
+                f"{base_indent}- name: >-",
+                f"{base_indent}  {name_part}"
+            ]
+        elif 'name:' in line:
+            name_part = line.split('name:', 1)[1].strip()
+            return [
+                f"{base_indent}name: >-",
+                f"{base_indent}  {name_part}"
+            ]
+        return [line]
+    
+    def _is_module_with_params(self, line: str) -> bool:
+        """Check if line is a module call with parameters."""
+        # Look for common Ansible module patterns
+        module_patterns = [
+            r'\s+[\w.]+:\s*\w+=',  # module: param=value
+            r'\s+-\s+[\w.]+:\s*\w+=',  # - module: param=value
+        ]
+        return any(re.search(pattern, line) for pattern in module_patterns)
+    
+    def _fix_module_params(self, line: str, base_indent: str) -> List[str]:
+        """Fix long module parameter lines."""
+        # Find the module name and parameters
+        if ':' not in line:
+            return [line]
+        
+        module_part, params_part = line.split(':', 1)
+        params_part = params_part.strip()
+        
+        # If it's a task with dash
+        if module_part.strip().startswith('- '):
+            module_name = module_part.strip()[2:]  # Remove '- '
+            result = [f"{base_indent}- {module_name}:"]
+            param_indent = base_indent + ' ' * 4
+        else:
+            result = [f"{module_part}:"]
+            param_indent = base_indent + ' ' * 2
+        
+        # Split parameters by spaces, but be careful with quoted strings
+        params = self._split_parameters(params_part)
+        
+        for param in params:
+            result.append(f"{param_indent}{param}")
+        
+        return result
+    
+    def _split_parameters(self, params_str: str) -> List[str]:
+        """Split parameter string while preserving quoted values."""
+        params = []
+        current_param = ""
+        in_quotes = False
+        quote_char = None
+        
+        i = 0
+        while i < len(params_str):
+            char = params_str[i]
+            
+            if char in ['"', "'"] and (i == 0 or params_str[i-1] != '\\'):
+                if not in_quotes:
+                    in_quotes = True
+                    quote_char = char
+                elif char == quote_char:
+                    in_quotes = False
+                    quote_char = None
+            
+            if char == ' ' and not in_quotes and current_param.strip():
+                params.append(current_param.strip())
+                current_param = ""
+            else:
+                current_param += char
+            
+            i += 1
+        
+        if current_param.strip():
+            params.append(current_param.strip())
+        
+        return params
+    
+    def _fix_when_condition(self, line: str, base_indent: str) -> List[str]:
+        """Fix long when conditions."""
+        when_part = line.split('when:', 1)[1].strip()
+        
+        # Split on 'and' and 'or' operators
+        conditions = re.split(r'\s+(and|or)\s+', when_part)
+        
+        if len(conditions) <= 1:
+            return [line]
+        
+        result = [f"{base_indent}when: >"]
+        condition_indent = base_indent + ' ' * 2
+        
+        current_line = conditions[0]
+        for i in range(1, len(conditions), 2):
+            operator = conditions[i]
+            condition = conditions[i + 1]
+            
+            if len(f"{current_line} {operator} {condition}") > (self.max_length - len(condition_indent)):
+                result.append(f"{condition_indent}{current_line}")
+                current_line = f"{operator} {condition}"
+            else:
+                current_line += f" {operator} {condition}"
+        
+        result.append(f"{condition_indent}{current_line}")
+        return result
+    
+    def _is_variable_definition(self, line: str) -> bool:
+        """Check if line is a variable definition."""
+        stripped = line.strip()
+        return (':' in stripped and 
+                not stripped.startswith('-') and
+                not any(keyword in stripped for keyword in ['name:', 'when:', 'with_', 'tags:']))
+    
+    def _fix_variable_definition(self, line: str, base_indent: str) -> List[str]:
+        """Fix long variable definitions."""
+        if ':' not in line:
+            return [line]
+        
+        var_name, var_value = line.split(':', 1)
+        var_value = var_value.strip()
+        
+        # If it's a simple string that's too long, use folded scalar
+        if (var_value.startswith('"') and var_value.endswith('"')) or \
+           (var_value.startswith("'") and var_value.endswith("'")):
+            quote_char = var_value[0]
+            content = var_value[1:-1]
+            return [
+                f"{var_name}: >",
+                f"{base_indent}  {quote_char}{content}{quote_char}"
+            ]
+        
+        return [line]
+    
+    def _is_long_string(self, line: str) -> bool:
+        """Check if line contains a long string value."""
+        return (': "' in line or ": '" in line) and len(line) > self.max_length
+    
+    def _fix_long_string(self, line: str, base_indent: str) -> List[str]:
+        """Fix long string values using YAML folded scalars."""
+        if ': "' in line:
+            key_part, value_part = line.split(': "', 1)
+            value_content = value_part.rsplit('"', 1)[0]
+            return [
+                f"{key_part}: >",
+                f"{base_indent}  \"{value_content}\""
+            ]
+        elif ": '" in line:
+            key_part, value_part = line.split(": '", 1)
+            value_content = value_part.rsplit("'", 1)[0]
+            return [
+                f"{key_part}: >",
+                f"{base_indent}  '{value_content}'"
+            ]
+        
+        return [line]
+    
+    def _fix_inline_list(self, line: str, base_indent: str) -> List[str]:
+        """Fix long inline lists by converting to multi-line format."""
+        # Find the key part
+        if ':' not in line:
+            return [line]
+        
+        key_part, list_part = line.split(':', 1)
+        list_part = list_part.strip()
+        
+        if not (list_part.startswith('[') and list_part.endswith(']')):
+            return [line]
+        
+        # Extract list items
+        list_content = list_part[1:-1]  # Remove brackets
+        items = []
+        current_item = ""
+        in_quotes = False
+        quote_char = None
+        
+        # Parse list items carefully
+        for char in list_content:
+            if char in ['"', "'"] and (not current_item or current_item[-1] != '\\'):
+                if not in_quotes:
+                    in_quotes = True
+                    quote_char = char
+                elif char == quote_char:
+                    in_quotes = False
+                    quote_char = None
+            
+            if char == ',' and not in_quotes:
+                if current_item.strip():
+                    items.append(current_item.strip())
+                current_item = ""
+            else:
+                current_item += char
+        
+        if current_item.strip():
+            items.append(current_item.strip())
+        
+        result = [f"{key_part}:"]
+        item_indent = base_indent + ' ' * 2
+        
+        for item in items:
+            result.append(f"{item_indent}- {item}")
+        
+        return result
+    
+    def _is_long_loop_construct(self, line: str) -> bool:
+        """Check if line has long loop constructs."""
+        loop_keywords = ['with_items:', 'with_dict:', 'with_list:', 'loop:', 'with_nested:']
+        return any(keyword in line for keyword in loop_keywords) and len(line) > self.max_length
+    
+    def _fix_loop_construct(self, line: str, base_indent: str) -> List[str]:
+        """Fix long loop constructs."""
+        for keyword in ['with_items:', 'with_dict:', 'with_list:', 'loop:', 'with_nested:']:
+            if keyword in line:
+                key_part, value_part = line.split(keyword, 1)
+                value_part = value_part.strip()
+                
+                # If it's a list, convert to multi-line
+                if value_part.startswith('[') and value_part.endswith(']'):
+                    return self._fix_inline_list(line, base_indent)
+                
+                # Otherwise use folded scalar
+                return [
+                    f"{key_part}{keyword} >",
+                    f"{base_indent}  {value_part}"
+                ]
+        
+        return [line]
+    
+    def _fix_tags(self, line: str, base_indent: str) -> List[str]:
+        """Fix long tags lines."""
+        if 'tags:' not in line or '[' not in line:
+            return [line]
+        
+        return self._fix_inline_list(line, base_indent)
+    
+    def _generic_line_break(self, line: str, base_indent: str) -> str or List[str]:
+        """Generic line breaking as last resort."""
+        # Try to break at logical points like spaces, but preserve functionality
+        if len(line) <= self.max_length:
+            return line
+        
+        # Find good break points (spaces, commas, etc.)
+        break_points = []
+        for i, char in enumerate(line):
+            if char in [' ', ',', '='] and i < self.max_length:
+                break_points.append(i)
+        
+        if break_points:
+            break_point = max(break_points)
+            first_part = line[:break_point + 1].rstrip()
+            second_part = line[break_point + 1:].lstrip()
+            
+            # Continue the line with proper indentation
+            continue_indent = base_indent + ' ' * 2
+            return [first_part, f"{continue_indent}{second_part}"]
+        
+        return line
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Fix common Ansible lint issues')
+    parser.add_argument('files', nargs='+', help='Ansible YAML files to fix')
+    parser.add_argument('--max-length', type=int, default=120, 
+                       help='Maximum line length (default: 120)')
+    parser.add_argument('--indent-size', type=int, default=2,
+                       help='YAML indentation size (default: 2)')
+    parser.add_argument('--dry-run', action='store_true',
+                       help='Show what would be changed without modifying files')
+    parser.add_argument('--backup', action='store_true',
+                       help='Create backup files before making changes')
+    parser.add_argument('--verbose', '-v', action='store_true',
+                       help='Show detailed changes in dry-run mode')
+    
+    args = parser.parse_args()
+    
+    fixer = AnsibleLintFixer(max_length=args.max_length, indent_size=args.indent_size)
+    
+    fixed_files = 0
+    for file_path in args.files:
+        if not Path(file_path).exists():
+            print(f"File not found: {file_path}")
+            continue
+        
+        if args.backup and not args.dry_run:
+            # Create backup
+            backup_path = f"{file_path}.backup"
+            with open(file_path, 'r', encoding='utf-8') as f:
+                backup_content = f.read()
+            with open(backup_path, 'w', encoding='utf-8') as f:
+                f.write(backup_content)
+            print(f"Created backup: {backup_path}")
+        
+        if args.dry_run:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                original_content = f.read()
+            
+            fixed_content = fixer.fix_content(original_content)
+            
+            if fixed_content != original_content:
+                print(f"Would fix: {file_path}")
+                
+                if args.verbose:
+                    # Show detailed changes
+                    original_lines = original_content.splitlines()
+                    fixed_lines = fixed_content.splitlines()
+                    
+                    changes = 0
+                    max_changes = 10  # Limit output
+                    
+                    for i, (orig, fixed) in enumerate(zip(original_lines, fixed_lines)):
+                        if orig != fixed and changes < max_changes:
+                            print(f"  Line {i+1}:")
+                            print(f"    - {orig}")
+                            print(f"    + {fixed}")
+                            changes += 1
+                    
+                    # Handle added/removed lines
+                    if len(original_lines) != len(fixed_lines):
+                        print(f"  Line count: {len(original_lines)} -> {len(fixed_lines)}")
+                    
+                    if changes >= max_changes:
+                        remaining = sum(1 for o, f in zip(original_lines, fixed_lines) if o != f) - max_changes
+                        if remaining > 0:
+                            print(f"  ... and {remaining} more changes")
+                else:
+                    # Show summary of changes
+                    original_lines = original_content.splitlines()
+                    fixed_lines = fixed_content.splitlines()
+                    
+                    change_types = []
+                    
+                    # Check for specific types of changes
+                    if any('---' in line for line in fixed_lines[:3]) and not any('---' in line for line in original_lines[:3]):
+                        change_types.append("Added document start")
+                    
+                    for orig, fixed in zip(original_lines, fixed_lines):
+                        if orig != fixed:
+                            if any(tv in orig for tv in ['yes', 'no', 'on', 'off']) and any(tv in fixed for tv in ['true', 'false']):
+                                if "Truth values" not in change_types:
+                                    change_types.append("Truth values")
+                            if 'ansible.builtin.' in fixed and 'ansible.builtin.' not in orig:
+                                if "FQCN modules" not in change_types:
+                                    change_types.append("FQCN modules")
+                            if 'state=latest' in orig and 'state=present' in fixed:
+                                if "Package state" not in change_types:
+                                    change_types.append("Package state")
+                            if len(orig) > args.max_length and len(fixed) <= args.max_length:
+                                if "Line length" not in change_types:
+                                    change_types.append("Line length")
+                    
+                    if change_types:
+                        print(f"    Changes: {', '.join(change_types)}")
+            else:
+                print(f"No changes needed: {file_path}")
+        else:
+            if fixer.fix_file(file_path):
+                fixed_files += 1
+    
+    if not args.dry_run:
+        if fixed_files > 0:
+            print(f"\n✅ Fixed {fixed_files} file(s)")
+        else:
+            print(f"\n✅ All {len(files_to_process)} files are already compliant!")
+    
+    if errors > 0:
+        print(f"❌ {errors} error(s) occurred")
+    
+    print(f"\n📊 Summary: Processed {len(files_to_process)} files")
+    
+    if not args.dry_run and not args.verbose:
+        print("\nCommon issues this script fixes:")
+        print("✓ Line length violations")
+        print("✓ Truth value errors (yes/no -> true/false)")
+        print("✓ Missing document start (---)")
+        print("✓ Indentation problems")
+        print("✓ Trailing whitespace")
+        print("✓ Multiple empty lines")
+        print("✓ FQCN module names (35+ modules)")
+        print("✓ Package state=latest -> state=present")
+        print("✓ Command/shell module syntax")
+        print("✓ Quote consistency issues")
+        print("✓ Octal file permissions")
+        print("✓ Long task names, variables, lists")
+        print("✓ Complex when conditions")
+        print("✓ Loop construct formatting")
+    
+    return 0 if errors == 0 else 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

@@ -1,0 +1,25 @@
+---
+# Full-line comment with yes should remain
+# yes should not change here
+
+task:
+  become: true
+  enabled: false  # inline comment kept
+  notify: "yes"  # quoted should not change
+  message: 'no'   # quoted should not change
+  when: true
+  args_line: copy: force=true mode=0644  # equals syntax
+  light: true
+  power: false # comment
+  description: "string saying yes or no should stay"
+
+# List values
+list_vals:
+  - yes
+  - no
+  - "yes"
+  - 'no'
+
+# Inline mapping (out of scope for this fixer, should remain)
+inline_map: { enabled: true, disabled: false }
+

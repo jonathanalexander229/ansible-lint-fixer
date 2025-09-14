@@ -1,0 +1,28 @@
+---
+- name: Use short module names
+  hosts: all
+  tasks:
+    - copy:
+        src: /etc/hosts
+        dest: /tmp/hosts
+    - template: src=foo.j2 dest=/tmp/foo
+    - file:
+        path: /tmp/bar
+        state: touch
+    - service: name=sshd state=restarted
+    - shell: echo hello
+    - command: /bin/true
+    - apt:
+        name: vim
+        state: present
+    - get_url:
+        url: https://example.com/file
+        dest: /tmp/file
+
+# Below should not accidentally convert values that are already FQCN or comments
+- name: Already FQCN
+  tasks:
+    - ansible.builtin.copy:
+        src: a
+        dest: b
+    - debug: msg="copy: test"  # string containing 'copy:'

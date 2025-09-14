@@ -1,0 +1,5 @@
+---
+# This file is missing document start and final newline
+name: example playbook
+hosts: all
+gather_facts: false
